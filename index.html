@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Aim Master 1080p</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; cursor: none; }
+        canvas { display: block; margin: auto; background: #1a1a1a; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        #ui { position: absolute; top: 20px; left: 20px; color: white; font-size: 22px; pointer-events: none; z-index: 10; }
+        
+        #settings-btn { position: absolute; top: 20px; right: 20px; font-size: 30px; cursor: pointer; background: none; border: none; z-index: 101; }
+        #settings-menu { 
+            position: absolute; top: 70px; right: 20px; background: rgba(10,10,10,0.95); 
+            padding: 20px; border-radius: 8px; color: white; display: none; z-index: 100; border: 1px solid #444; width: 200px;
+        }
+        select { background: #333; color: white; border: 1px solid #555; padding: 8px; margin: 10px 0; width: 100%; cursor: pointer; border-radius: 4px; }
+
+        #game-over {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); display: none; flex-direction: column;
+            justify-content: center; align-items: center; color: white; z-index: 200;
+        }
+        .btn { padding: 15px 30px; margin: 10px; font-size: 20px; cursor: pointer; border: none; border-radius: 5px; }
+        .btn-restart { background: #28a745; color: white; }
+    </style>
+</head>
+<body>
+
+    <button id="settings-btn">⚙️</button>
+    <div id="settings-menu" id="menu">
+        <label>Прицел:</label>
+        <select id="crosshair-type">
+            <option value="cross">Перекрестие</option>
+            <option value="dot">Точка</option>
+            <option value="circle">Круг</option>
+        </select>
+        <label>Форма:</label>
+        <select id="target-shape">
+            <option value="circle">Круг</option>
+            <option value="star">Звезда</option>
+            <option value="heart">Сердце</option>
+        </select>
+    </div>
+
+    <div id="ui">
+        <div>Жизни: <span id="hp" style="color:#ff4d4d">5</span> ❤️</div>
+        <div>Уровень: <span id="lvl" style="color:#4da6ff">1</span></div>
+        <div>Счёт: <span id="score">0</span></div>
+    </div>
+
+    <div id="game-over">
+        <h1 style="font-size: 60px; color: #ff4d4d;">GAME OVER</h1>
+        <p id="final-stats" style="font-size: 24px;"></p>
+        <button class="btn btn-restart" onclick="resetGame()">Играть снова</button>
+        <button class="btn" style="background:#555; color:white" onclick="location.reload()">Выход</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const V_WIDTH = 1920;  // Виртуальное разрешение
+    const V_HEIGHT = 1080;
+    
+    let score = 0, lives = 5, level = 1, gameOver = false;
+    let targets = [], mouse = { x: 0, y: 0 };
+    let lastShotTime = 0;
+    const shotDelay = 10; // Задержка 10мс
+
+    function resize() {
+        const scale = Math.min(window.innerWidth / V_WIDTH, window.innerHeight / V_HEIGHT);
+        canvas.width = V_WIDTH * scale;
+        canvas.height = V_HEIGHT * scale;
+        ctx.scale(scale, scale);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Функции рисования фигур (оптимизированы)
+    const drawFns = {
+        star(x, y, r) {
+            ctx.beginPath();
+            for (let i = 0; i < 5; i++) {
+                ctx.lineTo(Math.cos((18+i*72)/180*Math.PI)*r + x, -Math.sin((18+i*72)/180*Math.PI)*r + y);
+                ctx.lineTo(Math.cos((54+i*72)/180*Math.PI)*(r/2) + x, -Math.sin((54+i*72)/180*Math.PI)*(r/2) + y);
+            }
+            ctx.closePath(); ctx.fill();
+        },
+        heart(x, y, r) {
+            ctx.beginPath();
+            ctx.moveTo(x, y + r/4);
+            ctx.bezierCurveTo(x, y-r/2, x-r, y-r/2, x-r, y+r/4);
+            ctx.bezierCurveTo(x-r, y+r, x, y+r*1.2, x, y+r*1.5);
+            ctx.bezierCurveTo(x, y+r*1.2, x+r, y+r, x+r, y+r/4);
+            ctx.bezierCurveTo(x+r, y-r/2, x, y-r/2, x, y+r/4);
+            ctx.fill();
+        },
+        circle(x, y, r) {
+            ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+        }
+    };
+
+    class Target {
+        constructor() {
+            this.radius = 30 + Math.random() * 10;
+            this.x = Math.random() * (V_WIDTH - this.radius * 2) + this.radius;
+            this.y = V_HEIGHT + this.radius;
+            this.speed = 0.8 + (level * 0.5);
+            this.color = `hsl(${Math.random() * 360}, 70%, 50%)`;
+            this.shape = document.getElementById('target-shape').value;
+        }
+        update() { this.y -= this.speed; }
+        draw() {
+            ctx.fillStyle = this.color;
+            drawFns[this.shape](this.x, this.y, this.radius);
+        }
+    }
+
+    function animate() {
+        if (gameOver) return;
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, V_WIDTH, V_HEIGHT);
+
+        if (Math.random() < 0.008 + (level * 0.002)) targets.push(new Target());
+
+        for (let i = targets.length - 1; i >= 0; i--) {
+            let t = targets[i];
+            t.update(); t.draw();
+            if (t.y < -t.radius) {
+                targets.splice(i, 1);
+                lives--; updateUI();
+                if (lives <= 0) endGame();
+            }
+        }
+
+        drawCrosshair();
+        requestAnimationFrame(animate);
+    }
+
+    function drawCrosshair() {
+        ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 3;
+        const type = document.getElementById('crosshair-type').value;
+        ctx.beginPath();
+        if (type === 'dot') ctx.arc(mouse.x, mouse.y, 3, 0, Math.PI*2);
+        else if (type === 'cross') {
+            ctx.moveTo(mouse.x-20, mouse.y); ctx.lineTo(mouse.x+20, mouse.y);
+            ctx.moveTo(mouse.x, mouse.y-20); ctx.lineTo(mouse.x, mouse.y+20);
+        } else if (type === 'circle') ctx.arc(mouse.x, mouse.y, 20, 0, Math.PI*2);
+        ctx.stroke();
+    }
+
+    function updateUI() {
+        document.getElementById('hp').innerText = lives;
+        document.getElementById('score').innerText = score;
+        document.getElementById('lvl').innerText = level;
+        level = Math.floor(score / 15) + 1;
+    }
+
+    function endGame() {
+        gameOver = true;
+        document.body.style.cursor = 'default';
+        document.getElementById('game-over').style.display = 'flex';
+        document.getElementById('final-stats').innerText = `Счёт: ${score} | Уровень: ${level}`;
+    }
+
+    function resetGame() {
+        score = 0; lives = 5; level = 1; targets = []; gameOver = false;
+        document.body.style.cursor = 'none';
+        document.getElementById('game-over').style.display = 'none';
+        updateUI(); animate();
+    }
+
+    // Обработка координат мыши с учетом масштабирования
+    window.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        const scale = V_WIDTH / rect.width;
+        mouse.x = (e.clientX - rect.left) * scale;
+        mouse.y = (e.clientY - rect.top) * scale;
+    });
+
+    window.addEventListener('mousedown', e => {
+        if (gameOver) return;
+        
+        // Фикс задержки 10мс
+        const now = Date.now();
+        if (now - lastShotTime < shotDelay) return;
+        lastShotTime = now;
+
+        // Фикс работы меню: если кликнули по настройкам, не стреляем
+        if (e.target.closest('#settings-menu') || e.target.closest('#settings-btn')) return;
+
+        targets.forEach((t, i) => {
+            if (Math.hypot(mouse.x - t.x, mouse.y - t.y) < t.radius) {
+                targets.splice(i, 1); score++; updateUI();
+            }
+        });
+    });
+
+    // Исправленное управление меню
+    const sBtn = document.getElementById('settings-btn');
+    const sMenu = document.getElementById('settings-menu');
+
+    sBtn.onclick = (e) => {
+        const isVisible = sMenu.style.display === 'block';
+        sMenu.style.display = isVisible ? 'none' : 'block';
+        document.body.style.cursor = isVisible ? 'none' : 'default';
+        e.stopPropagation();
+    };
+
+    // Закрываем меню только при клике по канвасу
+    canvas.onclick = () => {
+        sMenu.style.display = 'none';
+        if (!gameOver) document.body.style.cursor = 'none';
+    };
+
+    animate();
+</script>
+</body>
+</html>
